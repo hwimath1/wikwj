@@ -1,0 +1,1206 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>근호안을 간단히 하기</title>
+
+  <!-- MathJax for LaTeX rendering -->
+  <script
+    src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"
+    defer
+  ></script>
+
+  <style>
+    /* 흑백 색상으로만 스타일 지정 */
+    body {
+      background-color: #ffffff;
+      color: #000000;
+      font-family: sans-serif;
+      margin: 20px;
+      padding: 0;
+    }
+    h1, h2, h3, h4, h5 {
+      text-align: center;
+      color: #000000;
+    }
+    #startScreen, #quizScreen, #resultScreen {
+      display: none;
+      margin: auto;
+      max-width: 700px;
+    }
+    #startScreen {
+      display: block; /* 첫 화면 보이기 */
+    }
+    .center {
+      text-align: center;
+    }
+    .energy-bar {
+      width: 100%;
+      height: 20px;
+      background-color: #ccc;
+      position: relative;
+      margin: 10px 0;
+    }
+    .energy-inner {
+      position: absolute;
+      left: 0;
+      top: 0;
+      height: 20px;
+      width: 100%;
+      background-color: #000;
+    }
+    .choice-button {
+      display: block;
+      margin: 6px 0;
+      width: 100%;
+      text-align: left;
+      border: 1px solid #000;
+      background: #fff;
+      color: #000;
+      cursor: pointer;
+      padding: 5px;
+    }
+    .choice-button:hover {
+      background-color: #eee;
+    }
+    #response {
+      white-space: pre-wrap; /* 줄바꿈 유지 */
+      background: #eee;
+      padding: 10px;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>근호안을 간단히 하기</h1>
+
+  <!-- 첫 화면: 이름, 난이도 선택 -->
+  <div id="startScreen">
+    <div style="text-align:center;">
+      <label for="playerName">이름: </label>
+      <input type="text" id="playerName" />
+    </div>
+    <br>
+    <div class="center">
+      <h3>난이도를 선택하세요</h3>
+      <button onclick="startGame('최상')">최상 (20초, +20점)</button>
+      <button onclick="startGame('상')">상 (30초, +15점)</button>
+      <button onclick="startGame('중')">중 (40초, +13점)</button>
+      <button onclick="startGame('하')">하 (시간제한 없음, +10점)</button>
+    </div>
+  </div>
+
+  <!-- 퀴즈 진행 화면 -->
+  <div id="quizScreen">
+    <div class="center">
+      <h2 id="difficultyLabel"></h2>
+      <div>남은 기회: <span id="livesLeft">3</span></div>
+      <div>현재 점수: <span id="score">0</span></div>
+      <div>전체 경과 시간: <span id="elapsedTime">0</span>초</div>
+      <div class="energy-bar" id="energyBar">
+        <div class="energy-inner" id="energyInner"></div>
+      </div>
+    </div>
+
+    <div id="questionContainer" class="center">
+      <div id="questionText" style="margin-bottom: 10px;"></div>
+      <div id="choices"></div>
+    </div>
+  </div>
+
+  <!-- 결과 화면 -->
+  <div id="resultScreen" class="center">
+    <h2>게임 종료</h2>
+    <p>최종 점수: <span id="finalScore"></span></p>
+    <p>총 경과 시간: <span id="finalTime"></span>초</p>
+
+    <button onclick="sendScore()">점수 전송</button>
+    <div id="response"></div>
+  </div>
+
+  <script>
+    /***************************************************************
+     * 점수 전송 함수
+     ***************************************************************/
+    function saveData(game, name, score, elapsedTime) {
+      const FUNCTION_URL = "https://us-central1-record-f420d.cloudfunctions.net/report";
+
+      const requestData = {
+        game,
+        name,
+        score: parseInt(score, 10),
+        elapsedTime: parseInt(elapsedTime, 10)
+      };
+
+      try {
+        fetch(FUNCTION_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(requestData)
+        })
+        .then(async (response) => {
+          const responseData = await response.json();
+          if (response.ok) {
+            document.getElementById('response').innerText =
+              `성공: ${JSON.stringify(responseData, null, 2)}`;
+          } else {
+            document.getElementById('response').innerText =
+              `오류: ${JSON.stringify(responseData, null, 2)}`;
+          }
+        })
+        .catch(error => {
+          console.error('요청 실패:', error);
+          document.getElementById('response').innerText =
+              `네트워크 오류: ${error.message}`;
+        });
+      } catch (error) {
+        console.error('요청 실패:', error);
+        document.getElementById('response').innerText =
+            `네트워크 오류: ${error.message}`;
+      }
+    }
+
+    /***************************************************************
+     * allQuestions 배열
+     *  - (루트는 분자에만) 등의 문구 제거
+     *  - 문제/보기 중복 제거
+     *  - sqrt(0.28) 등의 중복보기 수정
+     *  - sqrt(5/16)은 소수로 변환(0.3125)하여 문제와 정답이 동일표현 되지 않도록 조정
+     *  - 한 문제도 빠짐없이 전부 수록
+     ***************************************************************/
+    const allQuestions = [
+      /* (1) ~ (32): a√b 꼴로 나타내기 */
+      {
+        question:
+`문제: \\(\\sqrt{12}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{12}\\)",
+          "(2) \\(2\\sqrt{3}\\)",
+          "(3) \\(3\\sqrt{2}\\)",
+          "(4) \\(4\\sqrt{3}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{27}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{27}\\)",
+          "(2) \\(9\\sqrt{3}\\)",
+          "(3) \\(3\\sqrt{3}\\)",
+          "(4) \\(\\sqrt{9}\\)"
+        ],
+        correctIndex: 2
+      },
+      {
+        question:
+`문제: \\(\\sqrt{48}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(2\\sqrt{12}\\)",
+          "(2) \\(2\\sqrt{3}\\)",
+          "(3) \\(4\\sqrt{3}\\)",
+          "(4) \\(8\\sqrt{3}\\)"
+        ],
+        correctIndex: 2
+      },
+      {
+        question:
+`문제: \\(\\sqrt{50}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{25}\\)",
+          "(2) \\(10\\sqrt{2}\\)",
+          "(3) \\(5\\sqrt{2}\\)",
+          "(4) \\(2\\sqrt{25}\\)"
+        ],
+        correctIndex: 2
+      },
+      {
+        question:
+`문제: \\(\\sqrt{72}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(6\\sqrt{2}\\)",
+          "(2) \\(3\\sqrt{8}\\)",
+          "(3) \\(4\\sqrt{9}\\)",
+          "(4) \\(\\sqrt{36}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{80}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(4\\sqrt{5}\\)",
+          "(2) \\(8\\sqrt{5}\\)",
+          "(3) \\(2\\sqrt{20}\\)",
+          "(4) \\(5\\sqrt{4}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{99}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{9}\\)",
+          "(2) \\(3\\sqrt{11}\\)",
+          "(3) \\(9\\sqrt{11}\\)",
+          "(4) \\(11\\sqrt{3}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{112}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(4\\sqrt{7}\\)",
+          "(2) \\(8\\sqrt{14}\\)",
+          "(3) \\(2\\sqrt{28}\\)",
+          "(4) \\(\\sqrt{56}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{128}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{64}\\)",
+          "(2) \\(8\\sqrt{2}\\)",
+          "(3) \\(4\\sqrt{8}\\)",
+          "(4) \\(16\\sqrt{2}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{180}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(6\\sqrt{5}\\)",
+          "(2) \\(3\\sqrt{20}\\)",
+          "(3) \\(9\\sqrt{20}\\)",
+          "(4) \\(\\sqrt{36}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{243}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{81}\\)",
+          "(2) \\(3\\sqrt{27}\\)",
+          "(3) \\(9\\sqrt{3}\\)",
+          "(4) \\(27\\sqrt{3}\\)"
+        ],
+        correctIndex: 2
+      },
+      {
+        question:
+`문제: \\(\\sqrt{1000}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{100}\\)",
+          "(2) \\(10\\sqrt{10}\\)",
+          "(3) \\(100\\sqrt{10}\\)",
+          "(4) \\(5\\sqrt{20}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{18}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{9}\\)",
+          "(2) \\(2\\sqrt{9}\\)",
+          "(3) \\(3\\sqrt{2}\\)",
+          "(4) \\(6\\sqrt{2}\\)"
+        ],
+        correctIndex: 2
+      },
+      {
+        question:
+`문제: \\(\\sqrt{75}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{25}\\)",
+          "(2) \\(5\\sqrt{3}\\)",
+          "(3) \\(15\\sqrt{3}\\)",
+          "(4) \\(\\sqrt{15}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{240}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(4\\sqrt{15}\\)",
+          "(2) \\(8\\sqrt{30}\\)",
+          "(3) \\(2\\sqrt{60}\\)",
+          "(4) \\(\\sqrt{120}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(2\\sqrt{48}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(2\\sqrt{12}\\)",
+          "(2) \\(8\\sqrt{3}\\)",
+          "(3) \\(4\\sqrt{6}\\)",
+          "(4) \\(2\\sqrt{48}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(-\\sqrt{98}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(-7\\sqrt{2}\\)",
+          "(2) \\(-2\\sqrt{49}\\)",
+          "(3) \\(-\\sqrt{49}\\)",
+          "(4) \\(-14\\sqrt{2}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{52}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(4\\sqrt{13}\\)",
+          "(2) \\(2\\sqrt{13}\\)",
+          "(3) \\(\\sqrt{26}\\)",
+          "(4) \\(\\sqrt{4}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(-\\sqrt{108}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(-6\\sqrt{3}\\)",
+          "(2) \\(-3\\sqrt{12}\\)",
+          "(3) \\(-2\\sqrt{27}\\)",
+          "(4) \\(-\\sqrt{36}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{162}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{81}\\)",
+          "(2) \\(9\\sqrt{2}\\)",
+          "(3) \\(6\\sqrt{3}\\)",
+          "(4) \\(18\\sqrt{2}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(-\\sqrt{320}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(-8\\sqrt{5}\\)",
+          "(2) \\(-4\\sqrt{80}\\)",
+          "(3) \\(-\\sqrt{64}\\)",
+          "(4) \\(-16\\sqrt{5}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(-\\sqrt{50}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(-2\\sqrt{25}\\)",
+          "(2) \\(-5\\sqrt{2}\\)",
+          "(3) \\(-10\\sqrt{2}\\)",
+          "(4) \\(-\\sqrt{100}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{125}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{25}\\)",
+          "(2) \\(5\\sqrt{5}\\)",
+          "(3) \\(25\\sqrt{5}\\)",
+          "(4) \\(\\sqrt{5}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{384}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{64}\\)",
+          "(2) \\(8\\sqrt{6}\\)",
+          "(3) \\(4\\sqrt{96}\\)",
+          "(4) \\(2\\sqrt{192}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{63}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(3\\sqrt{7}\\)",
+          "(2) \\(\\sqrt{9}\\)",
+          "(3) \\(9\\sqrt{7}\\)",
+          "(4) \\(\\sqrt{21}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{112}\\)
+[지시] (중복문항이나 원문 유지) 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(2\\sqrt{28}\\)",
+          "(2) \\(\\sqrt{56}\\)",
+          "(3) \\(4\\sqrt{7}\\)",
+          "(4) \\(8\\sqrt{14}\\)"
+        ],
+        correctIndex: 2
+      },
+      {
+        question:
+`문제: \\(\\sqrt{192}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(4\\sqrt{12}\\)",
+          "(2) \\(2\\sqrt{96}\\)",
+          "(3) \\(8\\sqrt{3}\\)",
+          "(4) \\(\\sqrt{64}\\)"
+        ],
+        correctIndex: 2
+      },
+      {
+        question:
+`문제: \\(\\sqrt{54}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{9}\\)",
+          "(2) \\(3\\sqrt{6}\\)",
+          "(3) \\(6\\sqrt{3}\\)",
+          "(4) \\(\\sqrt{27}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{147}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(3\\sqrt{49}\\)",
+          "(2) \\(7\\sqrt{3}\\)",
+          "(3) \\(\\sqrt{49}\\)",
+          "(4) \\(14\\sqrt{3}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(-\\sqrt{252}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(-6\\sqrt{7}\\)",
+          "(2) \\(-7\\sqrt{6}\\)",
+          "(3) \\(-3\\sqrt{84}\\)",
+          "(4) \\(-2\\sqrt{126}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{117}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{9}\\)",
+          "(2) \\(3\\sqrt{13}\\)",
+          "(3) \\(\\sqrt{13}\\)",
+          "(4) \\(9\\sqrt{13}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(-\\sqrt{343}\\)
+[지시] 다음 수를 근호 안의 수가 가장 작은 자연수가 되도록 \\(a\\sqrt{b}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(-\\sqrt{49}\\)",
+          "(2) \\(-7\\sqrt{7}\\)",
+          "(3) \\(-1\\sqrt{343}\\)",
+          "(4) \\(-14\\sqrt{7}\\)"
+        ],
+        correctIndex: 1
+      },
+
+      /* (33) ~ (48): sqrt(b/a) 꼴 */
+      {
+        question:
+`문제: \\(-\\sqrt{0.05}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(-\\sqrt{\\dfrac{1}{20}}\\)",
+          "(2) \\(-\\sqrt{\\dfrac{5}{1000}}\\)",
+          "(3) \\(-\\sqrt{\\dfrac{1}{5}}\\)",
+          "(4) \\(-\\sqrt{\\dfrac{1}{25}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{0.24}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{12}{25}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{24}{100}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{6}{25}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{3}{25}}\\)"
+        ],
+        correctIndex: 2
+      },
+      {
+        question:
+`문제: \\(\\sqrt{0.0005}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{1}{200}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{1}{2000}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{5}{10000}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{1}{5000}}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{3.38}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{338}{100}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{169}{100}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{169}{50}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{338}{50}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{0.28}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.
+(※ 보기 중복 수정)`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{7}{25}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{28}{81}}\\)",  /* 변경: 중복되지 않도록 28/81 */
+          "(3) \\(\\sqrt{\\dfrac{14}{50}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{7}{50}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{6.48}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{648}{100}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{162}{25}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{324}{50}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{81}{25}}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{0.48}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{48}{100}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{24}{50}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{12}{25}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{48}{25}}\\)"
+        ],
+        correctIndex: 2
+      },
+      {
+        question:
+`문제: \\(\\sqrt{0.0018}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{9}{5000}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{18}{10000}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{1}{5000}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{9}{10000}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{\\dfrac{21}{400}}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{3}{400}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{21}{100}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{7}{400}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{21}{400}}\\)"
+        ],
+        correctIndex: 3
+      },
+      {
+        question:
+`문제: \\(\\sqrt{\\dfrac{3}{25}}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{3}{25}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{6}{50}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{1}{25}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{3}{5}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{\\dfrac{6}{27}}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{2}{9}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{6}{27}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{1}{9}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{3}{27}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(-\\sqrt{\\dfrac{10}{8}}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(-\\sqrt{\\dfrac{5}{4}}\\)",
+          "(2) \\(-\\sqrt{\\dfrac{2}{8}}\\)",
+          "(3) \\(-\\sqrt{\\dfrac{10}{4}}\\)",
+          "(4) \\(-\\sqrt{\\dfrac{5}{2}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(-\\sqrt{\\dfrac{28}{64}}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(-\\sqrt{\\dfrac{7}{16}}\\)",
+          "(2) \\(-\\sqrt{\\dfrac{14}{32}}\\)",
+          "(3) \\(-\\sqrt{\\dfrac{1}{16}}\\)",
+          "(4) \\(-\\sqrt{\\dfrac{28}{32}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{\\dfrac{3}{4}}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{3}{2}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{3}{4}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{6}{4}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{1}{4}}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{0.11}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{11}{100}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{1}{100}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{11}{10}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{1}{10}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{0.3125}\\)
+[지시] (\\(0.3125 = \\frac{5}{16}\\)) 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.
+(※ 문제/보기 동일표현 방지)`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{1}{16}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{10}{16}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{5}{4}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{5}{16}}\\)"
+        ],
+        correctIndex: 3
+      },
+
+      /* (74) ~ (84): \frac{\sqrt{b}}{a} 꼴 */
+      {
+        question:
+`문제: \\(\\sqrt{\\dfrac{5}{3}}\\)
+[지시] 다음을 \\(\\frac{\\sqrt{b}}{a}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\tfrac{\\sqrt{5}}{3}\\)",
+          "(2) \\(\\tfrac{\\sqrt{15}}{3}\\)",
+          "(3) \\(\\tfrac{\\sqrt{3}}{5}\\)",
+          "(4) \\(\\tfrac{\\sqrt{5}}{9}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{\\dfrac{2}{5}}\\)
+[지시] 다음을 \\(\\frac{\\sqrt{b}}{a}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\tfrac{\\sqrt{2}}{5}\\)",
+          "(2) \\(\\tfrac{\\sqrt{10}}{5}\\)",
+          "(3) \\(\\tfrac{\\sqrt{5}}{2}\\)",
+          "(4) \\(\\tfrac{\\sqrt{10}}{10}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{\\dfrac{7}{4}}\\)
+[지시] 다음을 \\(\\frac{\\sqrt{b}}{a}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\tfrac{\\sqrt{7}}{4}\\)",
+          "(2) \\(\\tfrac{\\sqrt{7}}{2}\\)",
+          "(3) \\(\\tfrac{\\sqrt{14}}{4}\\)",
+          "(4) \\(\\tfrac{\\sqrt{28}}{4}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{\\dfrac{13}{10}}\\)
+[지시] 다음을 \\(\\frac{\\sqrt{b}}{a}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\tfrac{\\sqrt{13}}{10}\\)",
+          "(2) \\(\\tfrac{\\sqrt{130}}{10}\\)",
+          "(3) \\(\\tfrac{\\sqrt{13}}{5}\\)",
+          "(4) \\(\\tfrac{\\sqrt{26}}{10}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\sqrt{\\dfrac{12}{2}}\\)
+[지시] 다음을 \\(\\frac{\\sqrt{b}}{a}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\tfrac{\\sqrt{6}}{1}\\)",
+          "(2) \\(\\tfrac{\\sqrt{12}}{2}\\)",
+          "(3) \\(\\tfrac{\\sqrt{24}}{2}\\)",
+          "(4) \\(\\tfrac{\\sqrt{3}}{2}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\frac{2\\sqrt{21}}{3}\\)
+[지시] 다음을 \\(\\frac{\\sqrt{b}}{a}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\tfrac{\\sqrt{42}}{3}\\)",
+          "(2) \\(\\tfrac{2\\sqrt{21}}{3}\\)",
+          "(3) \\(\\tfrac{\\sqrt{84}}{3}\\)",
+          "(4) \\(\\tfrac{\\sqrt{21}}{6}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\frac{\\sqrt{5}}{4}\\)
+[지시] 다음을 \\(\\frac{\\sqrt{b}}{a}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\tfrac{\\sqrt{5}}{4}\\)",
+          "(2) \\(\\tfrac{\\sqrt{20}}{4}\\)",
+          "(3) \\(\\tfrac{\\sqrt{1}}{4}\\)",
+          "(4) \\(\\tfrac{2\\sqrt{5}}{4}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\frac{\\sqrt{6}}{7}\\)
+[지시] 다음을 \\(\\frac{\\sqrt{b}}{a}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\tfrac{\\sqrt{42}}{7}\\)",
+          "(2) \\(\\tfrac{\\sqrt{6}}{7}\\)",
+          "(3) \\(\\tfrac{\\sqrt{12}}{7}\\)",
+          "(4) \\(\\tfrac{\\sqrt{3}}{7}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(-\\sqrt{\\dfrac{7}{10}}\\)
+[지시] 다음을 \\(\\frac{\\sqrt{b}}{a}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(-\\tfrac{\\sqrt{7}}{10}\\)",
+          "(2) \\(-\\tfrac{\\sqrt{14}}{10}\\)",
+          "(3) \\(-\\tfrac{\\sqrt{70}}{10}\\)",
+          "(4) \\(-\\tfrac{\\sqrt{7}}{5}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\sqrt{\\dfrac{20}{2}}\\)
+[지시] 다음을 \\(\\frac{\\sqrt{b}}{a}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\tfrac{\\sqrt{10}}{1}\\)",
+          "(2) \\(\\tfrac{\\sqrt{40}}{2}\\)",
+          "(3) \\(\\tfrac{\\sqrt{20}}{2}\\)",
+          "(4) \\(\\tfrac{\\sqrt{10}}{2}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(-\\sqrt{\\dfrac{75}{5}}\\)
+[지시] 다음을 \\(\\frac{\\sqrt{b}}{a}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(-\\tfrac{\\sqrt{15}}{1}\\)",
+          "(2) \\(-\\tfrac{\\sqrt{75}}{5}\\)",
+          "(3) \\(-\\tfrac{\\sqrt{15}}{5}\\)",
+          "(4) \\(-\\tfrac{\\sqrt{3}}{5}\\)"
+        ],
+        correctIndex: 0
+      },
+
+      /* (85) ~ (93): sqrt(b/a) 꼴 */
+      {
+        question:
+`문제: \\(\\frac{2\\sqrt{2}}{3}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{8}{9}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{2}{9}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{4}{9}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{2}{3}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\tfrac{\\sqrt{3}}{4}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{3}{16}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{3}{4}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{3}{64}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{12}{16}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\tfrac{\\sqrt{8}}{2}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{2}{1}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{8}{2}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{4}{2}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{16}{2}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(-\\tfrac{\\sqrt{6}}{7}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(-\\sqrt{\\dfrac{6}{7}}\\)",
+          "(2) \\(-\\sqrt{\\dfrac{6}{49}}\\)",
+          "(3) \\(-\\sqrt{\\dfrac{3}{7}}\\)",
+          "(4) \\(-\\sqrt{\\dfrac{1}{49}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(-\\tfrac{\\sqrt{18}}{3}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(-\\sqrt{\\dfrac{18}{9}}\\)",
+          "(2) \\(-\\sqrt{\\dfrac{9}{18}}\\)",
+          "(3) \\(-\\sqrt{\\dfrac{2}{1}}\\)",
+          "(4) \\(-\\sqrt{\\dfrac{1}{9}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\tfrac{3\\sqrt{3}}{4}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{9}{16}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{27}{16}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{12}{16}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{3}{16}}\\)"
+        ],
+        correctIndex: 1
+      },
+      {
+        question:
+`문제: \\(\\tfrac{\\sqrt{12}}{3}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{4}{3}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{12}{9}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{2}{3}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{3}{9}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(-\\tfrac{\\sqrt{14}}{7}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(-\\sqrt{\\dfrac{2}{7}}\\)",
+          "(2) \\(-\\sqrt{\\dfrac{14}{49}}\\)",
+          "(3) \\(-\\sqrt{\\dfrac{1}{7}}\\)",
+          "(4) \\(-\\sqrt{\\dfrac{7}{49}}\\)"
+        ],
+        correctIndex: 0
+      },
+      {
+        question:
+`문제: \\(\\tfrac{\\sqrt{18}}{6}\\)
+[지시] 다음을 \\(\\sqrt{\\dfrac{b}{a}}\\)의 꼴로 나타내어라.`,
+        choices: [
+          "(1) \\(\\sqrt{\\dfrac{18}{36}}\\)",
+          "(2) \\(\\sqrt{\\dfrac{1}{2}}\\)",
+          "(3) \\(\\sqrt{\\dfrac{1}{8}}\\)",
+          "(4) \\(\\sqrt{\\dfrac{9}{18}}\\)"
+        ],
+        correctIndex: 1
+      }
+    ];
+
+    // 전역 상태
+    let timeLimit = 0; // 각 문제 제한시간
+    let scorePerQuestion = 0;
+    let totalElapsedTime = 0;
+    let timerInterval = null;
+    let energyInterval = null;
+
+    let currentQuestionIndex = 0;
+    let lives = 3;
+    let score = 0;
+    let isTimeLimited = true;
+    let gameInProgress = false;
+    let startTime = 0;
+
+    // 난이도별로 게임 시작
+    function startGame(difficulty) {
+      const playerName = document.getElementById('playerName').value.trim();
+      if (!playerName) {
+        alert("이름을 입력해주세요!");
+        return;
+      }
+      // 난이도별 설정
+      switch(difficulty) {
+        case '최상':
+          timeLimit = 20;
+          scorePerQuestion = 20;
+          isTimeLimited = true;
+          break;
+        case '상':
+          timeLimit = 30;
+          scorePerQuestion = 15;
+          isTimeLimited = true;
+          break;
+        case '중':
+          timeLimit = 40;
+          scorePerQuestion = 13;
+          isTimeLimited = true;
+          break;
+        case '하':
+          timeLimit = 999999; // 사실상 무제한
+          scorePerQuestion = 10;
+          isTimeLimited = false;
+          break;
+      }
+
+      document.getElementById('startScreen').style.display = 'none';
+      document.getElementById('quizScreen').style.display = 'block';
+      document.getElementById('difficultyLabel').innerText = `난이도: ${difficulty}`;
+
+      // 전체 경과 시간 측정 시작
+      startTime = Date.now();
+      setInterval(() => {
+        if (!gameInProgress) return;
+        totalElapsedTime = Math.floor((Date.now() - startTime) / 1000);
+        document.getElementById('elapsedTime').innerText = totalElapsedTime;
+      }, 1000);
+
+      // 문제들 섞기
+      shuffleArray(allQuestions);
+
+      // 초기화
+      currentQuestionIndex = 0;
+      lives = 3;
+      score = 0;
+      document.getElementById('livesLeft').innerText = lives.toString();
+      document.getElementById('score').innerText = score.toString();
+      gameInProgress = true;
+
+      showQuestion();
+    }
+
+    // 문제 표시
+    function showQuestion() {
+      if (currentQuestionIndex >= allQuestions.length) {
+        endGame();
+        return;
+      }
+      const questionObj = allQuestions[currentQuestionIndex];
+
+      // 문제 표시
+      const qDiv = document.getElementById('questionText');
+      qDiv.innerHTML = questionObj.question.replace(/\n/g, "<br>");
+
+      // 보기 표시
+      const choicesDiv = document.getElementById('choices');
+      choicesDiv.innerHTML = "";
+      questionObj.choices.forEach((choiceText, i) => {
+        const btn = document.createElement('button');
+        btn.className = "choice-button";
+        btn.innerHTML = choiceText;
+        btn.onclick = () => checkAnswer(i);
+        choicesDiv.appendChild(btn);
+      });
+
+      // 수식 렌더링
+      MathJax.typeset();
+
+      // 에너지바
+      const energyBarOuter = document.getElementById('energyBar');
+      const energyBarInner = document.getElementById('energyInner');
+      energyBarOuter.style.display = "block";
+      energyBarInner.style.width = "100%";
+
+      if (timerInterval) clearInterval(timerInterval);
+      if (energyInterval) clearInterval(energyInterval);
+
+      if (isTimeLimited && timeLimit < 999999) {
+        let timeLeft = timeLimit;
+        timerInterval = setInterval(() => {
+          timeLeft--;
+          if (timeLeft <= 0) {
+            clearInterval(timerInterval);
+            timeOutAction();
+          }
+        }, 1000);
+
+        // 1/10초 단위로 에너지바 감소
+        let widthPercent = 100;
+        const decrement = 100 / (timeLimit * 10);
+        energyInterval = setInterval(() => {
+          widthPercent -= decrement;
+          if (widthPercent < 0) {
+            widthPercent = 0;
+            clearInterval(energyInterval);
+          }
+          energyBarInner.style.width = widthPercent + "%";
+        }, 100);
+      } else {
+        // 하(시간무제한)
+        energyBarOuter.style.display = "none";
+      }
+    }
+
+    // 시간 초과
+    function timeOutAction() {
+      lives--;
+      document.getElementById('livesLeft').innerText = lives.toString();
+      if (lives <= 0) {
+        endGame();
+        return;
+      }
+      alert("시간이 지났습니다! 기회가 1 감소합니다.");
+      showAnswerAndNext(true);
+    }
+
+    // 정답 체크
+    function checkAnswer(chosenIndex) {
+      const qObj = allQuestions[currentQuestionIndex];
+      if (timerInterval) clearInterval(timerInterval);
+      if (energyInterval) clearInterval(energyInterval);
+
+      if (chosenIndex === qObj.correctIndex) {
+        // 정답
+        score += scorePerQuestion;
+        document.getElementById('score').innerText = score.toString();
+        alert("정답입니다!");
+      } else {
+        // 오답
+        lives--;
+        document.getElementById('livesLeft').innerText = lives.toString();
+        alert("틀렸습니다. 정답은: " + qObj.choices[qObj.correctIndex]);
+        if (lives <= 0) {
+          endGame();
+          return;
+        }
+      }
+      showAnswerAndNext(false);
+    }
+
+    // 다음 문제
+    function showAnswerAndNext(timedOut = false) {
+      currentQuestionIndex++;
+      if (currentQuestionIndex >= allQuestions.length) {
+        endGame();
+        return;
+      }
+      showQuestion();
+    }
+
+    // 게임 종료
+    function endGame() {
+      gameInProgress = false;
+      document.getElementById('quizScreen').style.display = 'none';
+      document.getElementById('resultScreen').style.display = 'block';
+
+      document.getElementById('finalScore').innerText = score.toString();
+      document.getElementById('finalTime').innerText = totalElapsedTime.toString();
+    }
+
+    // 점수 전송
+    function sendScore() {
+      const playerName = document.getElementById('playerName').value.trim();
+      saveData("근호안을 간단히 하기", playerName, score, totalElapsedTime);
+    }
+
+    // 배열 섞기
+    function shuffleArray(arr) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+    }
+  </script>
+</body>
+</html>
